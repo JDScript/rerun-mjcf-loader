@@ -123,15 +123,15 @@ class RerunMJCFLogger:
             )
 
             # log joints
-            joint_path = path.copy()
             for joint_info in link_joint_info:
-                joint_path.append(joint_info["name"])
-                self.joint_to_transform["/".join(joint_path)] = (
+                path.append(joint_info["name"])
+                self.joint_to_transform["/".join(path)] = (
                     joint_info["pos"],
                     joint_info["quat"][[1, 2, 3, 0]],
+                    joint_info["axis"],
                 )
                 rr.log(
-                    joint_path,
+                    path,
                     rr.Transform3D(
                         translation=joint_info["pos"],
                         quaternion=joint_info["quat"][[1, 2, 3, 0]],
@@ -291,6 +291,7 @@ class RerunMJCFLogger:
 
             if joint_idx == -1:
                 joint_info["name"] = link_info["name"]
+                joint_info["axis"] = np.array([0.0, 0.0, 1.0])
                 joint_info["pos"] = np.array([0.0, 0.0, 0.0])
                 joint_info["n_dofs"] = 0
             else:
@@ -302,6 +303,7 @@ class RerunMJCFLogger:
                     .split("/")[-1]
                 )
                 joint_info["pos"] = self._model.jnt_pos[joint_idx]
+                joint_info["axis"] = self._model.jnt_axis[joint_idx]
                 joint_type = self._model.jnt_type[joint_idx]
                 if joint_type == mujoco.mjtJoint.mjJNT_HINGE:
                     joint_info["n_dofs"] = 1
@@ -393,6 +395,32 @@ if __name__ == "__main__":
 
     rr.init("dev")
     rr.connect_grpc("rerun+http://127.0.0.1:9876/proxy")
+    rr.set_time("recording_step", sequence=0)
+
     arena, assets = build_scene(ROBOT_XML_PATH, GRIPPER_XML_PATH)
     logger = RerunMJCFLogger(arena.to_xml_string(), assets, "robot")
     logger.log()
+
+    import pickle
+    import sys
+    from natsort import natsorted
+    from pathlib import Path
+
+    sys.path.append("./src")
+
+    from rerun_mjcf_logger.utils import log_angle_rot
+
+    DATA_PATH = Path("./bc_data/gello/0430_213005")
+    all_logs = natsorted(DATA_PATH.glob("*.pkl"))
+
+    def read_log(log_path: Path):
+        with log_path.open("rb") as f:
+            log = pickle.load(f)
+
+        return log
+
+    for idx, log_path in enumerate(all_logs):
+        rr.set_time("recording_step", sequence=idx)
+        joint_position = read_log(log_path)["joint_positions"][:6]
+        for i in range(6):
+            log_angle_rot(logger.joint_to_transform, i, joint_position[i])
